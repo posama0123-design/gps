@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>リアルタイムGPS共有 - Firebase & Leaflet</title>
+    
+    <!-- LeafletのCSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        body { margin: 0; padding: 0; font-family: sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        .overlay {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+        .user-id { font-weight: bold; color: #007bff; }
+    </style>
+</head>
+<body>
+
+<div class="overlay">
+    <div>あなたのID: <span id="my-id" class="user-id">取得中...</span></div>
+    <div id="status">位置情報取得中...</div>
+</div>
+
+<div id="map"></div>
+
+<!-- LeafletのJS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- Firebaseの処理 -->
+<script type="module">
+    // Firebase SDKの読み込み
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue, onDisconnect } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+    // HTMLエディターさんの設定を適用
+    const firebaseConfig = {
+        apiKey: "AIzaSyBaMe4Cz_3W75F5NCtioAguONgukg3-k0g",
+        authDomain: "my-call-14d70.firebaseapp.com",
+        databaseURL: "https://my-call-14d70-default-rtdb.firebaseio.com",
+        projectId: "my-call-14d70",
+        storageBucket: "my-call-14d70.firebasestorage.app",
+        messagingSenderId: "769393584037",
+        appId: "1:769393584037:web:279aa04477f2649230ea4c"
+    };
+
+    // Firebase初期化
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    // 1. ユーザーIDの作成（ランダム）
+    const myUserId = "Player_" + Math.floor(Math.random() * 9000 + 1000);
+    document.getElementById('my-id').textContent = myUserId;
+
+    // 2. 地図の初期化
+    const map = L.map('map').setView([35.6812, 139.7671], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // マーカー管理用の箱
+    const markers = {};
+
+    // ブラウザを閉じたらFirebaseから自分のデータを消す設定
+    const myLocationRef = ref(db, 'locations/' + myUserId);
+    onDisconnect(myLocationRef).remove();
+
+    // 3. 位置情報の監視と送信
+    if (navigator.geolocation) {
+        navigator.geolocation.watchPosition((position) => {
+            const lat = position.coords.latitude;
+            const lng = position.coords.longitude;
+
+            document.getElementById('status').textContent = "現在地を送信中...";
+
+            // 自分の地図を更新
+            if (!markers[myUserId]) {
+                markers[myUserId] = L.marker([lat, lng]).addTo(map).bindPopup("あなた (" + myUserId + ")").openPopup();
+                map.setView([lat, lng]);
+            } else {
+                markers[myUserId].setLatLng([lat, lng]);
+            }
+
+            // Firebaseへ送信
+            set(myLocationRef, {
+                lat: lat,
+                lng: lng,
+                timestamp: Date.now()
+            });
+
+        }, (error) => {
+            document.getElementById('status').textContent = "エラー: " + error.message;
+        }, {
+            enableHighAccuracy: true
+        });
+    }
+
+    // 4. 他の人の位置をリアルタイム受信
+    const locationsRef = ref(db, 'locations');
+    onValue(locationsRef, (snapshot) => {
+        const data = snapshot.val();
+        if (!data) return;
+
+        Object.keys(data).forEach((userId) => {
+            if (userId === myUserId) return; // 自分は飛ばす
+
+            const userLat = data[userId].lat;
+            const userLng = data[userId].lng;
+
+            if (markers[userId]) {
+                // すでにあるピンを動かす
+                markers[userId].setLatLng([userLat, userLng]);
+            } else {
+                // 新しいピンを作る
+                markers[userId] = L.marker([userLat, userLng]).addTo(map).bindPopup(userId);
+            }
+        });
+    });
+
+</script>
+</body>
+</html>
