@@ -3,46 +3,51 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>リアルタイムGPS共有 - Firebase & Leaflet</title>
-    
-    <!-- LeafletのCSS -->
+    <title>GPS Tracker - Pro</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    
     <style>
-        body { margin: 0; padding: 0; font-family: sans-serif; }
+        body { margin: 0; font-family: sans-serif; overflow: hidden; }
         #map { height: 100vh; width: 100%; }
-        .overlay {
-            position: fixed;
-            top: 10px;
-            left: 10px;
-            z-index: 1000;
-            background: white;
-            padding: 10px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        /* モード選択画面のスタイル */
+        #setup-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); z-index: 2000;
+            display: flex; justify-content: center; align-items: center; color: white;
+            flex-direction: column; text-align: center;
         }
-        .user-id { font-weight: bold; color: #007bff; }
+        .btn {
+            padding: 15px 30px; margin: 10px; font-size: 1.2rem; cursor: pointer;
+            border: none; border-radius: 10px; transition: 0.3s;
+        }
+        .btn-send { background: #007bff; color: white; }
+        .btn-watch { background: #28a745; color: white; }
+        .info-panel {
+            position: fixed; top: 10px; left: 10px; z-index: 1000;
+            background: white; padding: 10px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
     </style>
 </head>
 <body>
 
-<div class="overlay">
-    <div>あなたのID: <span id="my-id" class="user-id">取得中...</span></div>
-    <div id="status">位置情報取得中...</div>
+<div id="setup-screen">
+    <h1>GPS共有アプリ</h1>
+    <p>モードを選択してください</p>
+    <button class="btn btn-send" onclick="startApp('send')">場所を共有する（監視される側）</button>
+    <button class="btn btn-watch" onclick="startApp('watch')">場所を見る（監視側）</button>
+</div>
+
+<div class="info-panel">
+    <div id="status">モードを選択してください</div>
 </div>
 
 <div id="map"></div>
 
-<!-- LeafletのJS -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-<!-- Firebaseの処理 -->
 <script type="module">
-    // Firebase SDKの読み込み
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
     import { getDatabase, ref, set, onValue, onDisconnect } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-    // HTMLエディターさんの設定を適用
     const firebaseConfig = {
         apiKey: "AIzaSyBaMe4Cz_3W75F5NCtioAguONgukg3-k0g",
         authDomain: "my-call-14d70.firebaseapp.com",
@@ -53,79 +58,76 @@
         appId: "1:769393584037:web:279aa04477f2649230ea4c"
     };
 
-    // Firebase初期化
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
+    const myUserId = "User_" + Math.floor(Math.random() * 9000 + 1000);
 
-    // 1. ユーザーIDの作成（ランダム）
-    const myUserId = "Player_" + Math.floor(Math.random() * 9000 + 1000);
-    document.getElementById('my-id').textContent = myUserId;
-
-    // 2. 地図の初期化
     const map = L.map('map').setView([35.6812, 139.7671], 15);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors'
+        attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-    // マーカー管理用の箱
     const markers = {};
+    const paths = {}; // 各ユーザーの軌跡（青い線）を保存する
 
-    // ブラウザを閉じたらFirebaseから自分のデータを消す設定
-    const myLocationRef = ref(db, 'locations/' + myUserId);
-    onDisconnect(myLocationRef).remove();
+    // グローバルにアクセスできるようにwindowに登録
+    window.startApp = function(mode) {
+        document.getElementById('setup-screen').style.display = 'none';
+        
+        if (mode === 'send') {
+            document.getElementById('status').textContent = "自分の場所を送信中...";
+            startTracking();
+        } else {
+            document.getElementById('status').textContent = "みんなの場所を監視中...";
+        }
+        listenToUpdates();
+    };
 
-    // 3. 位置情報の監視と送信
-    if (navigator.geolocation) {
+    // 位置情報を追跡してFirebaseに送る
+    function startTracking() {
+        if (!navigator.geolocation) {
+            alert("GPSが使えません");
+            return;
+        }
+
+        const myLocationRef = ref(db, 'locations/' + myUserId);
+        onDisconnect(myLocationRef).remove();
+
         navigator.geolocation.watchPosition((position) => {
-            const lat = position.coords.latitude;
-            const lng = position.coords.longitude;
-
-            document.getElementById('status').textContent = "現在地を送信中...";
-
-            // 自分の地図を更新
-            if (!markers[myUserId]) {
-                markers[myUserId] = L.marker([lat, lng]).addTo(map).bindPopup("あなた (" + myUserId + ")").openPopup();
-                map.setView([lat, lng]);
-            } else {
-                markers[myUserId].setLatLng([lat, lng]);
-            }
-
-            // Firebaseへ送信
+            const { latitude, longitude } = position.coords;
             set(myLocationRef, {
-                lat: lat,
-                lng: lng,
+                lat: latitude,
+                lng: longitude,
                 timestamp: Date.now()
             });
-
-        }, (error) => {
-            document.getElementById('status').textContent = "エラー: " + error.message;
-        }, {
-            enableHighAccuracy: true
-        });
+        }, (err) => {
+            console.error(err);
+            alert("位置情報の許可が必要です。設定を確認してください。");
+        }, { enableHighAccuracy: true });
     }
 
-    // 4. 他の人の位置をリアルタイム受信
-    const locationsRef = ref(db, 'locations');
-    onValue(locationsRef, (snapshot) => {
-        const data = snapshot.val();
-        if (!data) return;
+    // Firebaseのデータを地図に反映（軌跡付き）
+    function listenToUpdates() {
+        onValue(ref(db, 'locations'), (snapshot) => {
+            const data = snapshot.val();
+            if (!data) return;
 
-        Object.keys(data).forEach((userId) => {
-            if (userId === myUserId) return; // 自分は飛ばす
+            Object.keys(data).forEach((id) => {
+                const pos = [data[id].lat, data[id].lng];
 
-            const userLat = data[userId].lat;
-            const userLng = data[userId].lng;
-
-            if (markers[userId]) {
-                // すでにあるピンを動かす
-                markers[userId].setLatLng([userLat, userLng]);
-            } else {
-                // 新しいピンを作る
-                markers[userId] = L.marker([userLat, userLng]).addTo(map).bindPopup(userId);
-            }
+                // 1. マーカー（ピン）の更新
+                if (!markers[id]) {
+                    markers[id] = L.marker(pos).addTo(map).bindPopup(id);
+                    // 2. 軌跡用の線（Polyline）を初期化
+                    paths[id] = L.polyline([pos], { color: 'blue', weight: 4, opacity: 0.6 }).addTo(map);
+                } else {
+                    markers[id].setLatLng(pos);
+                    // 3. 線に新しい点を追加
+                    paths[id].addLatLng(pos);
+                }
+            });
         });
-    });
-
+    }
 </script>
 </body>
 </html>
